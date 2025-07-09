@@ -1,0 +1,47 @@
+name: geo_fence_app
+description: A new Flutter application for WiFi + Location-based attendance with geofencing.
+publish_to: 'none' # Prevents publishing to pub.dev
+
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Location access & distance calculation
+  geolocator: ^11.0.0
+
+  # Permission handling (runtime)
+  permission_handler: ^11.0.0
+
+  # WiFi SSID/BSSID and network info
+  network_info_plus: ^5.0.2
+
+  # Device identifier (optional)
+  device_info_plus: ^9.1.0
+
+  # Check if connected to WiFi
+  connectivity_plus: ^5.0.2
+
+  # HTTP calls to backend
+  http: ^1.2.1
+
+  # NTP sync for accurate time (optional)
+  ntp: ^2.0.0
+
+  # Format dates/times
+  intl: ^0.18.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+  # Add asset folders here if needed:
+  # assets:
+  #   - assets/
