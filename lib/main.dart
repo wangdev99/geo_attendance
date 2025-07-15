@@ -5,8 +5,12 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:crypto/crypto.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
 import 'dart:convert';
+import 'dart:math';
+import 'package:url_launcher/url_launcher.dart';
 
 void main() {
   runApp(MaterialApp(
@@ -14,11 +18,28 @@ void main() {
     home: AttendanceCheckScreen(),
   ));
 }
+class MyLinkWidget extends StatelessWidget {
+  final Uri _url = Uri.parse('http://10.250.10.100/mucc/frontend/web/index.php?r=attendance/report');
 
+  Future<void> _launchUrl() async {
+    if (!await launchUrl(_url)) {
+      throw Exception('Could not launch $_url');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return TextButton(
+      onPressed: _launchUrl,
+      child: Text('Open Google'),
+    );
+  }
+}
 class AttendanceCheckScreen extends StatefulWidget {
   @override
   _AttendanceCheckScreenState createState() => _AttendanceCheckScreenState();
 }
+
 
 class _AttendanceCheckScreenState extends State<AttendanceCheckScreen> {
   bool isEligible = false;
@@ -30,6 +51,7 @@ class _AttendanceCheckScreenState extends State<AttendanceCheckScreen> {
   String? wifiSSID;
   String? wifiBSSID;
   String deviceId = "";
+  double distanceInMeters = 0;
 
   bool locationOn = false;
   bool wifiConnected = false;
@@ -44,19 +66,45 @@ class _AttendanceCheckScreenState extends State<AttendanceCheckScreen> {
     checkAllConditions();
   }
 
-  Future<void> initDeviceId() async {
-    final deviceInfo = DeviceInfoPlugin();
-    if (Platform.isAndroid) {
-      final androidInfo = await deviceInfo.androidInfo;
-      setState(() {
-        deviceId = androidInfo.id ?? "UNKNOWN_ANDROID_ID";
-      });
-    } else if (Platform.isIOS) {
-      final iosInfo = await deviceInfo.iosInfo;
-      setState(() {
-        deviceId = iosInfo.identifierForVendor ?? "UNKNOWN_IOS_ID";
-      });
+  Future<String> generateAndStoreDeviceId() async {
+    final prefs = await SharedPreferences.getInstance();
+    String? cachedId = prefs.getString('device_id');
+    if (cachedId != null && cachedId.isNotEmpty) {
+      return cachedId;
     }
+
+    final deviceInfo = DeviceInfoPlugin();
+    String raw = "";
+
+    try {
+      if (Platform.isAndroid) {
+        final info = await deviceInfo.androidInfo;
+        raw = "${info.manufacturer}_${info.model}_${info.id}";
+      } else if (Platform.isIOS) {
+        final info = await deviceInfo.iosInfo;
+        raw = "${info.name}_${info.model}_${info.identifierForVendor ?? ''}";
+      } else if (Platform.isWindows) {
+        final info = await deviceInfo.windowsInfo;
+        raw = "${info.computerName}_${info.deviceId}";
+      } else if (Platform.isLinux) {
+        final info = await deviceInfo.linuxInfo;
+        raw = "${info.name}_${info.machineId}";
+      } else if (Platform.isMacOS) {
+        final info = await deviceInfo.macOsInfo;
+        raw = "${info.computerName}_${info.systemGUID ?? ''}";
+      }
+    } catch (e) {
+      print("Device ID error: $e");
+      raw = DateTime.now().millisecondsSinceEpoch.toString();
+    }
+
+    String shortId = sha1.convert(utf8.encode(raw)).toString().substring(0, 8);
+    await prefs.setString('device_id', shortId);
+    return shortId;
+  }
+
+  Future<void> initDeviceId() async {
+    deviceId = await generateAndStoreDeviceId();
     fetchAttendanceLogs();
   }
 
@@ -71,6 +119,7 @@ class _AttendanceCheckScreenState extends State<AttendanceCheckScreen> {
     bool locationServiceEnabled = await Geolocator.isLocationServiceEnabled();
     locationOn = locationServiceEnabled;
     if (!locationOn) {
+      await Geolocator.openLocationSettings();
       updateUI();
       return;
     }
@@ -91,7 +140,7 @@ class _AttendanceCheckScreenState extends State<AttendanceCheckScreen> {
       return;
     }
 
-    double distanceInMeters = Geolocator.distanceBetween(
+    distanceInMeters = Geolocator.distanceBetween(
       currentPosition!.latitude,
       currentPosition!.longitude,
       targetLat,
@@ -159,7 +208,6 @@ class _AttendanceCheckScreenState extends State<AttendanceCheckScreen> {
         map.putIfAbsent(date, () => []);
         map[date]!.add(time);
       }
-      // Sort times to get correct IN (earliest) and OUT (latest)
       for (var date in map.keys) {
         map[date]!.sort((a, b) => DateFormat('hh:mm a').parse(a).compareTo(DateFormat('hh:mm a').parse(b)));
       }
@@ -174,10 +222,28 @@ class _AttendanceCheckScreenState extends State<AttendanceCheckScreen> {
     await fetchAttendanceLogs();
   }
 
+  void _launchMuccWebsite() async {
+    final Uri url = Uri.parse('http://10.250.10.100/mucc/frontend/web/index.php?r=attendance/report');
+    if (!await launchUrl(url)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not launch website')),
+      );
+    }
+  }
+
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text("Geo-Fence Attendance")),
+      appBar: AppBar(
+        title: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text("MUCC-Geo-Fence Attendance"),
+            Image.asset('assets/mu_logo.png', height: 36)
+          ],
+        ),
+      ),
       body: RefreshIndicator(
         onRefresh: _onRefresh,
         child: SingleChildScrollView(
@@ -189,6 +255,8 @@ class _AttendanceCheckScreenState extends State<AttendanceCheckScreen> {
                 Text(statusMessage, style: TextStyle(fontSize: 18)),
                 SizedBox(height: 10),
                 Text("Device ID: $deviceId", style: TextStyle(fontSize: 14, color: Colors.grey)),
+                if (wifiSSID != null) Text("WiFi SSID: $wifiSSID", style: TextStyle(fontSize: 14, color: Colors.grey)),
+                if (currentPosition != null) Text("Distance: ${distanceInMeters.toStringAsFixed(2)} meters", style: TextStyle(fontSize: 14, color: Colors.grey)),
                 SizedBox(height: 20),
                 ListTile(
                   leading: Icon(locationOn ? Icons.check_circle : Icons.cancel, color: locationOn ? Colors.green : Colors.red),
@@ -203,6 +271,23 @@ class _AttendanceCheckScreenState extends State<AttendanceCheckScreen> {
                   title: Text("Within Geo-Fence (200m)"),
                 ),
                 SizedBox(height: 20),
+
+
+
+                GestureDetector(
+                  onTap: _launchMuccWebsite,
+                  child: Text(
+                    "View Attendance",
+                    style: TextStyle(
+                      color: Colors.blue,
+                      decoration: TextDecoration.underline,
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+
+                SizedBox(height: 30),
+
                 ElevatedButton(
                   onPressed: isEligible ? submitAttendance : null,
                   child: Text("Submit Attendance"),
@@ -229,6 +314,11 @@ class _AttendanceCheckScreenState extends State<AttendanceCheckScreen> {
                     leading: Icon(Icons.calendar_today, color: Colors.blue),
                   );
                 }).toList(),
+
+
+
+                SizedBox(height: 30),
+                Text("Designed and Developed by Computer Centre, Manipur University", textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: Colors.grey)),
               ],
             ),
           ),
